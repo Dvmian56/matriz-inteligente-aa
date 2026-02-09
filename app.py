@@ -2,93 +2,152 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Matriz Pro Visual", layout="wide")
+st.set_page_config(page_title="Matriz Anglo Real", layout="wide")
 
-# ESTILOS CSS PARA QUE PAREZCA EXCEL REAL
+# --- ESTILOS CSS (PARA QUE SE VEA COMO EXCEL) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f0f2f6; }
-    div[data-testid="stExpander"] { border: 1px solid #ccc; border-radius: 5px; background: white; }
-    h1 { color: #003366; }
-    
-    /* Estilo de Tabla Personalizado */
-    table { width: 100%; border-collapse: collapse; font-family: Calibri, sans-serif; font-size: 13px; }
-    th { background-color: #004a99 !important; color: white !important; text-align: center !important; border: 1px solid #ccc !important; padding: 8px !important; }
-    td { border: 1px solid #ddd !important; padding: 5px !important; color: #333; }
-    tr:nth-child(even) { background-color: #f9f9f9; }
+    .tabla-matriz { width: 100%; border-collapse: collapse; font-family: Calibri, sans-serif; font-size: 11px; }
+    .header-azul { background-color: #004a99; color: white; padding: 10px; text-align: center; font-weight: bold; border: 1px solid black; }
+    .fila-disciplina { background-color: #d9d9d9; font-weight: bold; text-align: left; padding: 5px; border: 1px solid #666; }
+    .th-col { background-color: #004a99; color: white; border: 1px solid black; padding: 4px; text-align: center; font-size: 10px; writing-mode: vertical-rl; transform: rotate(180deg); height: 100px; }
+    .td-celda { border: 1px solid #ccc; padding: 4px; color: black; }
+    .td-dato { border: 1px solid #ccc; padding: 4px; text-align: center; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
+# --- SIDEBAR: DATOS Y EQUIPO ---
 with st.sidebar:
-    st.header("⚙️ Configuración")
+    st.header("1. Configuración")
     ac_nom = st.text_input("Administrador (RF)", "Victor Otárola")
     
-    if 'mapeo' not in st.session_state: st.session_state.mapeo = []
-    with st.expander("👤 Vincular Especialista"):
-        e_nom = st.text_input("Nombre")
-        e_disc = st.text_input("Sigla (Ej: EE)")
-        if st.button("Agregar"):
-            st.session_state.mapeo.append({"n": e_nom, "d": e_disc.upper()})
-            st.rerun()
+    st.divider()
+    st.header("2. Especialistas")
+    if 'equipo' not in st.session_state: st.session_state.equipo = []
+    
+    nombre = st.text_input("Nombre Revisor")
+    sigla = st.text_input("Sigla Disciplina (Ej: EE, ME)")
+    if st.button("Agregar a la Matriz"):
+        st.session_state.equipo.append({"n": nombre, "d": sigla.upper()})
+        st.rerun()
+        
+    # Mostrar equipo actual
+    if st.session_state.equipo:
+        st.write("---")
+        for e in st.session_state.equipo:
+            st.caption(f"👤 {e['n']} (Revisa: {e['d']})")
             
-    if st.button("🗑️ Reset Equipo"):
-        st.session_state.mapeo = []
+    if st.button("Borrar Todo"):
+        st.session_state.equipo = []
         st.rerun()
 
-# --- APP ---
-st.title("🛡️ Matriz de Revisión: Vista Ejecutiva")
+# --- APP PRINCIPAL ---
+st.title("🛡️ Visualizador de Matriz AA-VPP-BSCD-MTZ-0001")
 
 archivo = st.file_uploader("Sube el MDL (Excel)", type=['xlsx'])
 
 if archivo:
     xl = pd.ExcelFile(archivo)
     hoja = st.selectbox("Selecciona Pestaña", xl.sheet_names)
-    df = xl.parse(hoja).loc[:, ~xl.parse(hoja).columns.duplicated()]
-
-    c_req = ["No. de documento", "Disciplina", "Tipo de Documento", "Título"]
+    df = xl.parse(hoja)
     
-    if all(c in df.columns for c in c_req):
-        # Procesamiento
-        df_base = df[c_req].drop_duplicates().sort_values(by=["Disciplina", "Tipo de Documento"])
+    # Limpieza de columnas duplicadas
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    # Columnas Clave
+    c_id = "No. de documento"
+    c_disc = "Disciplina"
+    c_tipo = "Tipo de Documento"
+    c_tit = "Título"
+
+    if all(c in df.columns for c in [c_id, c_disc, c_tipo, c_tit]):
         
-        # Reglas
+        # 1. Preparar Datos
+        df_base = df[[c_id, c_disc, c_tipo, c_tit]].drop_duplicates().sort_values(by=[c_disc, c_tipo])
+        
+        # 2. Asignar Roles (Lógica interna)
+        # AC siempre es RF
         df_base[ac_nom] = "RF"
-        for esp in st.session_state.mapeo:
-            if esp["n"] not in df_base.columns: df_base[esp["n"]] = ""
-            df_base.loc[df_base["Disciplina"].astype(str).str.contains(esp["d"], na=False), esp["n"]] = "R"
+        # Especialistas
+        for integrante in st.session_state.equipo:
+            if integrante['n'] not in df_base.columns: df_base[integrante['n']] = ""
+            mask = df_base[c_disc].astype(str).str.contains(integrante['d'], na=False, case=False)
+            df_base.loc[mask, integrante['n']] = "R"
 
-        # --- PESTAÑAS VISUALES ---
-        t1, t2, t3 = st.tabs(["👁️ VISTA EXCEL (Solo Lectura)", "✏️ EDITOR (Modo Trabajo)", "📥 EXPORTAR"])
+        # --- 3. CONSTRUCCIÓN VISUAL (HTML) ---
+        # Aquí es donde ocurre la magia para que se vea agrupado
+        
+        html = f"""
+        <table class="tabla-matriz">
+            <tr>
+                <td colspan="{4 + len(st.session_state.equipo) + 1}" class="header-azul">
+                    MATRIZ DE REVISIÓN DE ENTREGABLES - {hoja.upper()}
+                </td>
+            </tr>
+            <tr style="background-color: #f2f2f2;">
+                <td class="td-celda" style="font-weight:bold; width:150px;">N° Documento</td>
+                <td class="td-celda" style="font-weight:bold;">Título</td>
+                <td class="td-celda" style="font-weight:bold;">Tipo</td>
+                <td class="td-celda" style="font-weight:bold;">Disciplina</td>
+                <td class="th-col">{ac_nom}</td>
+        """
+        
+        # Columnas dinámicas de especialistas
+        revisores_cols = [e['n'] for e in st.session_state.equipo]
+        for rev in revisores_cols:
+            html += f'<td class="th-col">{rev}</td>'
+        
+        html += "</tr>"
 
-        with t1:
-            st.info("Vista renderizada con formato corporativo. (No editable, solo visualización)")
+        # --- ITERACIÓN POR GRUPOS (LO QUE PEDÍAS) ---
+        disciplinas_unicas = df_base[c_disc].unique()
+        
+        for disciplina in disciplinas_unicas:
+            # 1. FILA SEPARADORA DE DISCIPLINA (LA BARRA GRIS)
+            html += f"""
+            <tr>
+                <td colspan="{4 + len(st.session_state.equipo) + 1}" class="fila-disciplina">
+                    ▼ {disciplina}
+                </td>
+            </tr>
+            """
             
-            # MOTOR DE ESTILO (PANDAS STYLER)
-            def color_disciplina(val):
-                return 'background-color: #e6f3ff' if isinstance(val, str) else ''
-
-            styler = df_base.style.set_properties(**{'text-align': 'center'})\
-                .set_table_styles([
-                    {'selector': 'th', 'props': [('background-color', '#004a99'), ('color', 'white'), ('font-weight', 'bold')]},
-                    {'selector': 'tr:hover', 'props': [('background-color', '#ffff99')]}
-                ])\
-                .hide(axis="index")
+            # 2. DOCUMENTOS DE ESA DISCIPLINA
+            docs_disciplina = df_base[df_base[c_disc] == disciplina]
             
-            # Renderizamos HTML puro
-            st.write(styler.to_html(), unsafe_allow_html=True)
+            for index, row in docs_disciplina.iterrows():
+                html += f"""
+                <tr>
+                    <td class="td-celda">{row[c_id]}</td>
+                    <td class="td-celda" style="font-size:10px;">{row[c_tit]}</td>
+                    <td class="td-celda">{row[c_tipo]}</td>
+                    <td class="td-celda" style="text-align:center;">{row[c_disc]}</td>
+                    
+                    <td class="td-dato" style="background-color: #e6f7ff;">RF</td>
+                """
+                
+                # Roles de Especialistas
+                for rev in revisores_cols:
+                    rol = row.get(rev, "")
+                    color_bg = "#fff"
+                    if rol == "R": color_bg = "#ffffcc" # Amarillo suave si revisa
+                    html += f'<td class="td-dato" style="background-color:{color_bg};">{rol}</td>'
+                
+                html += "</tr>"
 
-        with t2:
-            st.warning("Aquí puedes cambiar los datos manualmente.")
-            # Aquí dejamos el editor funcional
-            cols_edit = [c for c in df_base.columns if c not in c_req]
-            cfg = {c: st.column_config.SelectboxColumn(options=["", "R", "RA", "I", "RF"]) for c in cols_edit}
-            df_final = st.data_editor(df_base, column_config=cfg, use_container_width=True, height=600)
+        html += "</table>"
+        
+        # RENDERIZAR LA TABLA
+        st.markdown(html, unsafe_allow_html=True)
+        
+        # --- BOTÓN DE DESCARGA ---
+        st.divider()
+        if st.button("📥 Descargar este Excel"):
+            # Lógica de xlsxwriter (simplificada para no alargar el código visual)
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_base.to_excel(writer, index=False)
+            st.download_button("Bajar Archivo", output.getvalue(), f"Matriz_{hoja}.xlsx")
 
-        with t3:
-            st.success("Descarga el archivo final para firmar.")
-            if st.button("Generar Excel Oficial"):
-                # (Lógica de exportación xlsxwriter igual que antes)
-                pass # Aquí iría el bloque de descarga que ya tienes
     else:
-        st.error("Faltan columnas clave.")
+        st.error(f"El archivo no tiene las columnas requeridas: {c_id}, {c_disc}, {c_tipo}, {c_tit}")
