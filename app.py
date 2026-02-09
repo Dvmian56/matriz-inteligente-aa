@@ -2,68 +2,106 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Matriz Anglo American", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Matriz Pro - Anglo American", layout="wide")
 
-# --- 1. CONFIGURACIÓN EN BARRA LATERAL ---
+# --- SIDEBAR: EQUIPO Y REGLAS ---
 with st.sidebar:
-    st.header("⚙️ Configuración del Contrato")
-    proy = st.text_input("Proyecto", "1009107 - ECME HIGHER LEVEL")
-    cont = st.text_input("Contrato", "CP620-P2400311-4")
+    st.header("📋 Datos del Contrato")
+    proy = st.text_input("Proyecto", "1013084 MANEJO DE EFLUENTES")
+    cont = st.text_input("Contrato", "CP684-P2100361-3ODS23")
     
     st.divider()
-    st.header("👥 Equipo y Reglas")
+    st.header("👥 Configuración de Equipo")
     ac_nom = st.text_input("Administrador de Contrato (RF)", "Victor Otárola")
     
     if 'mapeo' not in st.session_state: st.session_state.mapeo = []
 
     with st.expander("👤 Asignar Especialista por Disciplina"):
-        e_nom = st.text_input("Nombre")
-        e_disc = st.text_input("Sigla Disciplina (Ej: EE, ME)")
+        e_nom = st.text_input("Nombre del Revisor")
+        e_disc = st.text_input("Sigla Disciplina (Ej: EE, MG, PE)")
         if st.button("Vincular"):
             if e_nom and e_disc:
-                st.session_state.mapeo.append({"n": e_nom, "d": e_disc.upper(), "c": "R"})
+                st.session_state.mapeo.append({"n": e_nom, "d": e_disc.upper()})
                 st.rerun()
-    
+
     if st.button("🗑️ Limpiar Equipo"):
         st.session_state.mapeo = []
         st.rerun()
 
-# --- 2. CARGA DEL MDL ---
-st.title("🏗️ Generador de Matriz de Revisión Inteligente")
-archivo = st.file_uploader("Sube el Listado de Entregables (MDL)", type=['xlsx'])
+# --- CUERPO PRINCIPAL ---
+st.title("🛡️ Matriz de Revisión Inteligente")
+
+archivo = st.file_uploader("Sube el MDL (Excel)", type=['xlsx'])
 
 if archivo:
-    df_raw = pd.read_excel(archivo)
-    
-    # Selección de columnas del Excel
-    c1, c2, c3 = st.columns(3)
-    col_disc = c1.selectbox("Columna Disciplina", df_raw.columns)
-    col_tipo = c2.selectbox("Columna Tipo Documento", df_raw.columns)
-    col_doc = c3.selectbox("Columna Título", df_raw.columns)
+    xl = pd.ExcelFile(archivo)
+    hoja_sel = st.selectbox("Selecciona la pestaña (Ej: Ingeniería)", xl.sheet_names)
+    df_raw = xl.parse(hoja_sel)
 
-    # Procesamiento Base
-    df_base = df_raw[[col_disc, col_tipo, col_doc]].drop_duplicates().sort_values(by=[col_disc, col_tipo])
-    
-    # Aplicar Reglas Automáticas
-    df_base[ac_nom] = "RF" # El AC siempre es Revisor Final
-    for esp in st.session_state.mapeo:
-        if esp["n"] not in df_base.columns: df_base[esp["n"]] = ""
-        df_base.loc[df_base[col_disc].astype(str).str.upper() == esp["d"], esp["n"]] = esp["c"]
+    # Columnas específicas del archivo Aconex
+    col_id = "No. de documento"
+    col_disc = "Disciplina"
+    col_tipo = "Tipo de Documento"
+    col_tit = "Título"
 
-    # --- 3. LAS DOS VISTAS (TABS) ---
-    tab1, tab2 = st.tabs(["📄 Vista Detallada", "📊 Vista Resumida"])
+    if all(c in df_raw.columns for c in [col_id, col_disc, col_tipo, col_tit]):
+        
+        # 1. Preparación y Ordenamiento
+        df_base = df_raw[[col_id, col_disc, col_tipo, col_tit]].drop_duplicates()
+        df_base = df_base.sort_values(by=[col_disc, col_tipo])
 
-    with tab1:
-        st.subheader("Control por Documento Individual")
-        df_det_final = st.data_editor(df_base, use_container_width=True, key="det")
+        # 2. Aplicar Reglas Automáticas
+        # Administrador es RF en todo el listado
+        df_base[ac_nom] = "RF"
+        
+        # Especialistas por disciplina
+        for esp in st.session_state.mapeo:
+            if esp["n"] not in df_base.columns: df_base[esp["n"]] = ""
+            mask = df_base[col_disc].astype(str).str.contains(esp["d"], na=False, case=False)
+            df_base.loc[mask, esp["n"]] = "R"
 
-    with tab2:
-        st.subheader("Resumen por Disciplina y Tipo")
-        # Agrupamos por disciplina y tipo, tomando el flujo del primer documento del grupo
-        df_res = df_det_final.groupby([col_disc, col_tipo]).first().reset_index()
-        df_res = df_res.drop(columns=[col_doc])
-        st.dataframe(df_res, use_container_width=True)
+        # --- 3. LAS DOS VISTAS (TABS) ---
+        tab_det, tab_res = st.tabs(["📄 Vista Detallada", "📊 Vista Resumida"])
 
-    # --- 4. EXPORTACIÓN ---
-    if st.button("💾 Descargar Matriz Oficial"):
-        st.success("¡Matriz lista para descarga! (Lógica de XlsxWriter aplicada)")
+        with tab_det:
+            st.subheader("Control Operativo por Documento")
+            opciones = ["", "R", "RA", "I", "RF", "A", "AF"]
+            config_cols = {col: st.column_config.SelectboxColumn(options=opciones) 
+                          for col in df_base.columns if col not in [col_id, col_disc, col_tipo, col_tit]}
+            df_det_final = st.data_editor(df_base, column_config=config_cols, use_container_width=True)
+
+        with tab_res:
+            st.subheader("Resumen de Responsabilidades (Agrupado)")
+            # Agrupación por Disciplina y Tipo
+            df_res_final = df_det_final.groupby([col_disc, col_tipo]).first().reset_index()
+            df_res_final = df_res_final.drop(columns=[col_id, col_tit])
+            st.dataframe(df_res_final, use_container_width=True)
+
+        # --- 4. EXPORTACIÓN A EXCEL OFICIAL ---
+        st.divider()
+        if st.button("📥 Descargar Matriz Oficial (Excel)"):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_det_final.to_excel(writer, sheet_name='Matriz', index=False, startrow=10)
+                wb = writer.book
+                ws = writer.sheets['Matriz']
+                
+                # Formatos Corporativos
+                fmt_azul = wb.add_format({'bold': True, 'bg_color': '#004a99', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                fmt_gris = wb.add_format({'bold': True, 'bg_color': '#D9D9D9', 'border': 1, 'align': 'center'})
+                
+                # Cabecera Anglo American
+                ws.merge_range('A1:Z1', 'AA-VPP-BSCD-MTZ-0001 Matriz de Revisión de Entregables', fmt_azul)
+                ws.write('B3', f'Proyecto: {proy}')
+                ws.write('B4', f'Contrato: {cont}')
+                
+                # Pintar cargos de los especialistas
+                col_idx = 4
+                for r in st.session_state.mapeo:
+                    ws.write(9, col_idx, "ESPECIALISTA", fmt_gris)
+                    col_idx += 1
+
+            st.download_button("Confirmar Descarga", output.getvalue(), f"Matriz_{cont}.xlsx")
+    else:
+        st.error(f"Faltan columnas obligatorias en la hoja '{hoja_sel}'.")
